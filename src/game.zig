@@ -5,6 +5,12 @@ const Vision = @import("vision.zig").Vision;
 const math = std.math;
 const print = std.debug.print;
 pub const Game = struct {
+    shader: rl.Shader = undefined,
+    player_pos_loc: i32 = undefined,
+    radius_loc: i32 = undefined,
+    resolution_loc: i32 = undefined,
+    renderTexture: rl.RenderTexture2D = undefined, // Add this
+
     collision_step_id: u64 = 0,
     vision: *Vision = undefined,
     pause: bool = false,
@@ -82,6 +88,20 @@ pub const Game = struct {
         g.player = T.Player{
             .pos = .{ T.iToF32(@divTrunc(g.screenWidth, 2)), T.iToF32(@divTrunc(g.screenHeight, 2)) },
         };
+
+        // shader stuff
+        g.shader = try rl.loadShader(null, "assets/shader/vision.glsl");
+        std.debug.print("Shader loaded, ID: {}\n", .{g.shader.id});
+        if (g.shader.id == 0) {
+            std.debug.print("ERROR: Failed to load shader\n", .{});
+            return error.ShaderLoadFailed;
+        }
+        g.player_pos_loc = rl.getShaderLocation(g.shader, "player_pos");
+        g.radius_loc = rl.getShaderLocation(g.shader, "radius");
+        g.resolution_loc = rl.getShaderLocation(g.shader, "resolution");
+
+        g.renderTexture = try rl.loadRenderTexture(g.screenWidth, g.screenHeight);
+
     }
 
     fn draw(g: *Game) void {
