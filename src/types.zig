@@ -39,27 +39,30 @@ pub const Player = struct {
     collision_mask: u32 = 1,
     vision_mask: u32 = 1,
     // drawable: bool = true,
+    texture_idle: rl.Texture2D = undefined,
+    // texture_run:rl.Texture2D,
     color: rl.Color = .blue,
     vel: Vec2f = Vec2f{ 0, 0 },
     maxvel: Vec2f = Vec2f{ 400, 600 },
-    speedX: f32 = 250,
+    speedX: f32 = 200,
     vision_r: f32 = 200,
     jump_power: f32 = 500,
     is_grounded: bool = false,
 
-    pub fn draw(g: *Player) void {
-        const baspos = toRLVec(g.pos);
-        const cir1pos = baspos.subtract(toRLVec(.{ 0, g.r }));
-        const cir2pos = baspos.add(toRLVec(.{ 0, g.r }));
-        const recpos = baspos.subtract(toRLVec(.{ g.r, g.r }));
-        rl.drawCircleV(cir1pos, g.r, g.color);
-        rl.drawCircleV(cir2pos, g.r, g.color);
-        rl.drawRectangleV(recpos, toRLVec(.{ g.r * 2, g.r * 2 }), g.color);
+    pub fn draw(p: *Player) void {
+        const baspos = toRLVec(p.pos);
+        const cir1pos = baspos.subtract(toRLVec(.{ 0, p.r }));
+        const cir2pos = baspos.add(toRLVec(.{ 0, p.r }));
+        const recpos = baspos.subtract(toRLVec(.{ p.r, p.r }));
+        rl.drawCircleV(cir1pos, p.r, p.color);
+        rl.drawCircleV(cir2pos, p.r, p.color);
+        rl.drawRectangleV(recpos, toRLVec(.{ p.r * 2, p.r * 2 }), p.color);
+    }
+
+    pub fn drawTexture(p: *Player) void {
+        p.texture_idle.draw(fToI32(p.pos[0] - p.r), fToI32(p.pos[1] - 2 * p.r), .blue);
     }
 };
-
-// pub const VisionMask = enum(u32) {
-// };
 
 /// Platforms are in the form of rectangle for now.
 /// later on we can add more complex shapes like circles or polygons
@@ -72,11 +75,17 @@ pub const Platform = struct {
     drawable: bool = true,
     pos: Vec2f,
     size: Vec2f,
-    color: rl.Color = .gray,
+    color: rl.Color = .sky_blue,
 };
 
-pub const GridCell = struct {
-    pids: std.ArrayList(usize),
+pub const TileType = enum {
+    empty,
+    wall,
+};
+
+pub const Tile = struct {
+    type: TileType = .empty,
+    platform_id: usize,
 };
 
 pub fn movePlayer(g: *Game) void {
@@ -106,6 +115,8 @@ pub fn movePlayer(g: *Game) void {
                 if (j < 0 or k < 0 or j >= WorldMap.GridCellNumberX or k >= WorldMap.GridCellNumberY) continue;
                 for (g.wmap.grid[@intCast(j)][@intCast(k)].pids.items) |pid| {
                     if (g.collision_step_id == g.wmap.platforms.items[pid].collision_step_id) continue;
+                    const col_id = g.wmap.platforms.items[pid].collision_id;
+                    if (g.player.collision_mask | col_id != col_id and col_id == 0) continue;
                     retvel = checkPlayerCollision(pos, g.player.r, g.player.vel, g.wmap.platforms.items[pid], &poschange);
                     if (g.player.vel[0] != retvel[0]) {
                         velocity_step[0] = 0;
@@ -130,39 +141,26 @@ pub fn checkPlayerCollision(pos: Vec2f, capr: f32, vel: Vec2f, plat: Platform, p
     var retvel = vel;
     const captop = pos[1] - capr;
     const capbot = pos[1] + capr;
-    // find closest point on platform to the capsule's center
     const closest_plat_point_x = math.clamp(pos[0], plat.pos[0], plat.pos[0] + plat.size[0]);
     const closest_plat_point_y = math.clamp(pos[1], plat.pos[1], plat.pos[1] + plat.size[1]);
-
-    // find closest point on capsule central vertical segment to the closest point of the platform
-    // that we found above
     const closest_cap_point_y = math.clamp(closest_plat_point_y, captop, capbot);
     const closest_cap_point_x = pos[0];
-
-    // find their distance^2:
     const dx = closest_cap_point_x - closest_plat_point_x;
     const dy = closest_cap_point_y - closest_plat_point_y;
     const dis2 = dx * dx + dy * dy;
-
-    // if there is collision
     if (dis2 < capr * capr and dis2 > 0) {
         const dist = math.sqrt(dis2);
         const overlap = capr - dist;
         const dx_norm = dx / dist;
         const dy_norm = dy / dist;
-
         poschange[0] += dx_norm * overlap;
         poschange[1] += dy_norm * overlap;
-
-        // if player is moving down and colliding with platform
         if (dy_norm < -0.7) {
             if (vel[1] > 0) retvel[1] = 0;
         }
-        // if player is hitting the platform from below
         if (dy_norm > 0.7 and retvel[1] < 0) {
             retvel[1] = 0;
         }
-        // if player is hitting the platform from the side
         if (@abs(dx_norm) > 0.7) {
             retvel[0] = 0;
         }
@@ -171,85 +169,75 @@ pub fn checkPlayerCollision(pos: Vec2f, capr: f32, vel: Vec2f, plat: Platform, p
 }
 
 pub const WorldMap = struct {
-    pub const GridSize: f32 = 128;
-    pub const GridCellNumberX: f32 = 10;
-    pub const GridCellNumberY: f32 = 6;
-    pub const GridSizeVec2f = Vec2f{ GridSize, GridSize };
-    grid: [GridCellNumberX][GridCellNumberY]GridCell,
+    pub const TileSize: f32 = 8;
+    pub const TileNumberX: f32 = 128;
+    pub const TileNumberY: f32 = 100;
+    pub const TileSizeVec2f = Vec2f{ TileSize, TileSize };
+    tileset: std.AutoHashMap(Vec2i, Tile),
     platforms: std.ArrayList(Platform),
 
     pub fn init(allocator: std.mem.Allocator) !*WorldMap {
         const map = try allocator.create(WorldMap);
         map.* = .{
-            .grid = undefined,
             .platforms = try std.ArrayList(Platform).initCapacity(allocator, 10),
+            .tileset = std.AutoHashMap(Vec2i, Tile).init(allocator),
         };
         try map.setup(allocator);
         return map;
     }
 
     pub fn setup(map: *WorldMap, allocator: std.mem.Allocator) !void {
-        for (0..GridCellNumberX) |x| {
-            for (0..GridCellNumberY) |y| {
-                map.grid[x][y] = .{ .pids = try std.ArrayList(usize).initCapacity(allocator, 10) };
-            }
-        }
-
         try map.platforms.append(allocator, Platform{
             .pos = .{ 0, 0 },
-            .size = .{1,1},
+            .size = .{ 1, 1 },
             .collision_id = 0,
             .drawable = false,
         });
 
         try map.platforms.append(allocator, Platform{
-            .pos = .{ 100, 50 },
-            .size = .{ 100, 200 },
+            .pos = .{ 13, 6 },
+            .size = .{ 12, 24 },
         });
 
         try map.platforms.append(allocator, Platform{
-            .pos = .{ 200, 200 },
-            .size = .{ 300, 150 },
+            .pos = .{ 24, 24 },
+            .size = .{ 36, 18 },
         });
 
         try map.platforms.append(allocator, Platform{
-            .pos = .{ 700, 250 },
-            .size = .{ 200, 150 },
+            .pos = .{ 85, 28 },
+            .size = .{ 24, 18 },
         });
 
         try map.platforms.append(allocator, Platform{
-            .pos = .{ 500, 450 },
-            .size = .{ 200, 100 },
+            .pos = .{ 60, 54 },
+            .size = .{ 24, 12 },
         });
 
         try map.platforms.append(allocator, Platform{
-            .pos = .{ 0, GridSize * GridCellNumberY - 11 },
-            .size = .{ GridSize * GridCellNumberX - 1, 10 },
+            .pos = .{ 0, TileNumberY - 1 },
+            .size = .{  TileNumberX , 1 },
         });
 
         for (map.platforms.items, 0..) |platform, pid| {
-            if (pid == 0) continue;
-            const imin: usize = @intFromFloat(platform.pos[0] / iToF32(WorldMap.GridSize));
-            const jmin: usize = @intFromFloat(platform.pos[1] / iToF32(WorldMap.GridSize));
-            const imax: usize = @intFromFloat((platform.pos[0] + platform.size[0]) / iToF32(WorldMap.GridSize));
-            const jmax: usize = @intFromFloat((platform.pos[1] + platform.size[1]) / iToF32(WorldMap.GridSize));
+            if (platform.collision_id == 0) continue;
+            const imin: usize = @intCast(platform.pos[0]);
+            const imax: usize = @intCast(platform.pos[0] + platform.size[0]);
+            const jmin: usize = @intCast(platform.pos[1]);
+            const jmax: usize = @intCast(platform.pos[1] + platform.size[1]);
             var i = imin;
             while (i <= imax) : (i += 1) {
                 var j = jmin;
                 while (j <= jmax) : (j += 1) {
-                    try map.grid[i][j].pids.append(allocator, pid);
+                    map.tileset.put(.{ @intCast(i), @intCast(j) }, .{ .type = .block, .platform_id = pid });
                 }
             }
         }
     }
 
     pub fn deinit(map: *WorldMap, allocator: std.mem.Allocator) void {
-        for (0..GridCellNumberX) |x| {
-            for (0..GridCellNumberY) |y| {
-                map.grid[x][y].pids.deinit(allocator);
-            }
-        }
         map.platforms.deinit(allocator);
+        map.tileset.deinit();
         allocator.destroy(map);
     }
 };

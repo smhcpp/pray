@@ -126,7 +126,7 @@ pub const Vision = struct {
                     for (g.wmap.grid[@intCast(i)][@intCast(j)].pids.items) |pid| {
                         if (g.wmap.platforms.items[pid].vision_step_id == v.vision_step_id) continue;
                         g.wmap.platforms.items[pid].vision_step_id = v.vision_step_id;
-                        try v.checkVisionCollision(pid, &corner, &closest);
+                        try v.checkPenetratedVisionCollision(pid, &corner, &closest);
                     }
                 }
             }
@@ -142,6 +142,27 @@ pub const Vision = struct {
                 closest.pos = col;
                 closest.pid = pid;
                 closest.dist2 = d;
+            }
+        }
+    }
+
+    fn checkPenetratedVisionCollision(v: *Vision, pid: usize, corner: *const Corner, closest: *Corner) !void {
+        const collision = try v.getCollision(pid, corner);
+        if (collision) |col| {
+            const d = T.dist2(col, v.g.player.pos);
+            if (closest.dist2 > d) {
+                const penetration_depth: f32 = 30.0; // How deep light goes into wall (pixels)
+                const dist = std.math.sqrt(d);
+                var extended_pos = col;
+                if (dist > 0.1) {
+                    const dx = (col[0] - v.g.player.pos[0]) / dist;
+                    const dy = (col[1] - v.g.player.pos[1]) / dist;
+                    extended_pos[0] += dx * penetration_depth;
+                    extended_pos[1] += dy * penetration_depth;
+                }
+                closest.pos = extended_pos;
+                closest.pid = pid;
+                closest.dist2 = d; // Important: Compare against REAL distance, not extended distance
             }
         }
     }
@@ -175,12 +196,23 @@ pub const Vision = struct {
     }
 
     pub fn drawPlayerVision(v: *Vision) void {
+        if (v.hits.items.len < 3) return;
         std.mem.sort(Corner, v.hits.items, {}, comptime lessThan);
-        var i:usize=0;
-        while (i<v.hits.items.len-1):(i+=1){
-            rl.drawTriangle(T.toRLVec(v.g.player.pos), T.toRLVec(v.hits.items[i+1].pos), T.toRLVec(v.hits.items[i].pos),.yellow);
+        const gl = rl.gl;
+        const center = v.g.player.pos;
+        gl.rlBegin(gl.rl_triangles);
+        for (0..v.hits.items.len) |i| {
+            const a = v.hits.items[i].pos;
+            const b = v.hits.items[(i + 1) % v.hits.items.len].pos;
+            gl.rlColor4ub(255, 255, 255, 255);
+            gl.rlVertex2f(center[0], center[1]);
+
+            gl.rlColor4ub(255, 255, 255, 1);
+            gl.rlVertex2f(b[0], b[1]);
+            gl.rlVertex2f(a[0], a[1]);
         }
-        rl.drawTriangle(T.toRLVec(v.g.player.pos), T.toRLVec(v.hits.items[0].pos), T.toRLVec(v.hits.items[v.hits.items.len-1].pos),.yellow);
+
+        gl.rlEnd();
     }
 };
 

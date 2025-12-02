@@ -13,10 +13,14 @@ uniform vec2 resolution;
 void main() {
     vec4 texColor = texture(texture0, fragTexCoord);
 
-    // Convert to pixel coordinates
+    // Convert UV to pixel coordinates
     vec2 pixelPos = fragTexCoord * resolution;
 
-    float dist = distance(pixelPos, player_pos);
+    // FIX: Flip the player's Y coordinate to match OpenGL's coordinate system
+    // Raylib (Top-Left) vs OpenGL (Bottom-Left)
+    vec2 corrected_player_pos = vec2(player_pos.x, resolution.y - player_pos.y);
+
+    float dist = distance(pixelPos, corrected_player_pos);
 
     if (dist > radius) {
         finalColor = vec4(0.0, 0.0, 0.0, 1.0); // Black outside

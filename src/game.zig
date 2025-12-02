@@ -4,25 +4,27 @@ const T = @import("types.zig");
 const Vision = @import("vision.zig").Vision;
 const math = std.math;
 const print = std.debug.print;
+
 pub const Game = struct {
     shader: rl.Shader = undefined,
     player_pos_loc: i32 = undefined,
     radius_loc: i32 = undefined,
     resolution_loc: i32 = undefined,
-    renderTexture: rl.RenderTexture2D = undefined, // Add this
+    renderTexture: rl.RenderTexture2D = undefined,
 
     collision_step_id: u64 = 0,
     vision: *Vision = undefined,
     pause: bool = false,
     fps: i32 = 60,
-    gravity: f32 = 500,
+    gravity: f32 = 600,
     friction: f32 = 10,
     dt: f32 = undefined,
     allocator: std.mem.Allocator,
     player: T.Player = undefined,
     wmap: *T.WorldMap = undefined,
-    screenWidth: i32 = T.fToI32(T.WorldMap.GridSize * T.WorldMap.GridCellNumberX),
-    screenHeight: i32 = T.fToI32(T.WorldMap.GridSize * T.WorldMap.GridCellNumberY),
+    screenWidth: i32 = T.fToI32(T.WorldMap.TileSize * T.WorldMap.TileNumberX),
+    screenHeight: i32 = T.fToI32(T.WorldMap.TileSize * T.WorldMap.TileNumberY),
+
     inputs: struct {
         right: bool,
         left: bool,
@@ -32,6 +34,8 @@ pub const Game = struct {
         dash: bool,
         attack: bool,
         escape: bool,
+        space: bool,
+        space_release: bool,
     } = .{
         .right = false,
         .left = false,
@@ -41,6 +45,8 @@ pub const Game = struct {
         .dash = false,
         .attack = false,
         .escape = false,
+        .space = false,
+        .space_release = false,
     },
 
     pub fn init(allocator: std.mem.Allocator) !*Game {
@@ -48,8 +54,6 @@ pub const Game = struct {
         game.* = .{
             .allocator = allocator,
         };
-        try game.setup();
-        game.dt = 1.0 / T.iToF32(game.fps);
         return game;
     }
 
@@ -74,11 +78,17 @@ pub const Game = struct {
         g.inputs.jump = rl.isKeyDown(rl.KeyboardKey.space);
         g.inputs.dash = rl.isKeyDown(rl.KeyboardKey.e);
         g.inputs.attack = rl.isKeyDown(rl.KeyboardKey.r);
+        g.inputs.space = rl.isKeyPressed(rl.KeyboardKey.space);
+        g.inputs.space_release = rl.isKeyReleased(rl.KeyboardKey.space);
         g.inputs.escape = rl.isKeyPressed(rl.KeyboardKey.escape);
         if (g.inputs.escape) {
             g.pause = !g.pause;
             print("Pause: {}\n", .{g.pause});
         }
+    }
+
+    fn loadTextures(g:*Game) !void{
+        g.player.texture_idle= try rl.loadTexture("assets/sprites/player-idle.png");
     }
 
     fn setup(g: *Game) !void {
@@ -89,44 +99,63 @@ pub const Game = struct {
             .pos = .{ T.iToF32(@divTrunc(g.screenWidth, 2)), T.iToF32(@divTrunc(g.screenHeight, 2)) },
         };
 
-        // shader stuff
-        g.shader = try rl.loadShader(null, "assets/shader/vision.glsl");
-        std.debug.print("Shader loaded, ID: {}\n", .{g.shader.id});
+        // Shader setup
+        g.shader = try rl.loadShader(null, "assets/shaders/vision2.glsl");
         if (g.shader.id == 0) {
-            std.debug.print("ERROR: Failed to load shader\n", .{});
-            return error.ShaderLoadFailed;
+            print("ERROR: Failed to load shader\n", .{});
+            // Handle error or return
         }
+
+        // Get Uniform Locations
         g.player_pos_loc = rl.getShaderLocation(g.shader, "player_pos");
         g.radius_loc = rl.getShaderLocation(g.shader, "radius");
         g.resolution_loc = rl.getShaderLocation(g.shader, "resolution");
 
-        g.renderTexture = try rl.loadRenderTexture(g.screenWidth, g.screenHeight);
+        // Set constant uniforms (Resolution doesn't change)
+        const res = [2]f32{ T.iToF32(g.screenWidth), T.iToF32(g.screenHeight) };
+        rl.setShaderValue(g.shader, g.resolution_loc, &res, rl.ShaderUniformDataType.vec2);
 
+        // Load Render Texture (Off-screen canvas)
+        g.renderTexture = try rl.loadRenderTexture(g.screenWidth, g.screenHeight);
+        // rl.setTextureFilter(g.renderTexture.texture, rl.TextureFilter.bilinear);
+        // try g.loadTextures();
     }
 
     fn draw(g: *Game) void {
+        rl.beginTextureMode(g.renderTexture);
+        rl.clearBackground(rl.Color.blank);
+        g.vision.drawPlayerVision();
+        rl.endTextureMode();
         if (g.pause) g.drawGridLines();
         for (g.wmap.platforms.items) |p| {
             if (!p.drawable) continue;
-            const left = @max(p.pos[0], g.player.pos[0] - g.player.vision_r, 0);
-            const right = @min(p.pos[0] + p.size[0], g.player.pos[0] + g.player.vision_r, T.iToF32(g.screenWidth));
-            const top = @max(p.pos[1], g.player.pos[1] - g.player.vision_r, 0);
-            const bottom = @min(p.pos[1] + p.size[1], g.player.pos[1] + g.player.vision_r, T.iToF32(g.screenHeight));
+            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r, 0);
+            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r, T.iToF32(g.screenWidth));
+            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r, 0);
+            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r, T.iToF32(g.screenHeight));
             if (left < right and top < bottom)
                 rl.drawRectangleV(.{ .x = left, .y = top }, .{ .x = right - left, .y = bottom - top }, p.color);
         }
-        g.vision.drawPlayerVision();
         g.player.draw();
+        // g.player.drawTexture();
+        rl.beginShaderMode(g.shader);
+        const p_pos = [2]f32{ g.player.pos[0], g.player.pos[1] };
+        const rad = g.player.vision_r;
+        rl.setShaderValue(g.shader, g.player_pos_loc, &p_pos, rl.ShaderUniformDataType.vec2);
+        rl.setShaderValue(g.shader, g.radius_loc, &rad, rl.ShaderUniformDataType.float);
+        const tex = g.renderTexture.texture;
+        rl.drawTextureRec(tex, rl.Rectangle{ .x = 0, .y = 0, .width = T.iToF32(tex.width), .height = -T.iToF32(tex.height) }, rl.Vector2{ .x = 0, .y = 0 }, rl.Color.white);
+        rl.endShaderMode();
     }
 
     fn drawGridLines(g: *Game) void {
         var i: i32 = 0;
-        while (i < T.WorldMap.GridCellNumberY) : (i += 1) {
-            rl.drawLineV(rl.Vector2{ .x = 0, .y = T.iToF32(i) * T.WorldMap.GridSize }, rl.Vector2{ .x = T.iToF32(g.screenWidth), .y = T.iToF32(i) * T.WorldMap.GridSize }, .yellow);
+        while (i < T.WorldMap.TileNumberY) : (i += 1) {
+            rl.drawLineV(rl.Vector2{ .x = 0, .y = T.iToF32(i) * T.WorldMap.TileSize }, rl.Vector2{ .x = T.iToF32(g.screenWidth), .y = T.iToF32(i) * T.WorldMap.TileSize }, .yellow);
         }
         i = 0;
-        while (i < T.WorldMap.GridCellNumberX) : (i += 1) {
-            rl.drawLineV(rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.GridSize, .y = 0 }, rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.GridSize, .y = T.iToF32(g.screenHeight) }, .yellow);
+        while (i < T.WorldMap.TileNumberX) : (i += 1) {
+            rl.drawLineV(rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.TileSize, .y = 0 }, rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.TileSize, .y = T.iToF32(g.screenHeight) }, .yellow);
         }
     }
 
@@ -141,9 +170,10 @@ pub const Game = struct {
             if (g.player.vel[0] > 0) g.player.vel[0] -= g.friction;
             if (g.player.vel[0] < 0) g.player.vel[0] += g.friction;
         }
-        if (rl.isKeyPressed(rl.KeyboardKey.space)) {
+        if (g.inputs.space) {
             g.player.vel[1] = -g.player.jump_power;
         }
+        if (g.inputs.space_release and g.player.vel[1] < 0) g.player.vel[1] /= 2;
 
         const gr = if (g.player.vel[1] > 0) 2 * g.gravity * g.dt else g.gravity * g.dt;
         g.player.vel[1] = if (g.player.vel[1] <= g.player.maxvel[1]) g.player.vel[1] + gr else g.player.maxvel[1];
@@ -153,10 +183,10 @@ pub const Game = struct {
     pub fn run(g: *Game) !void {
         rl.initWindow(g.screenWidth, g.screenHeight, "Platformer 2d");
         defer rl.closeWindow(); // Close window and OpenGL context
+        try g.setup();
         rl.setExitKey(rl.KeyboardKey.null);
         rl.setTargetFPS(g.fps); // Set our game to run at 60 frames-per-second
         while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-            // g.collision_frame_id += 1;
             g.updateInputs();
             g._testInput();
             if (!g.pause) {
@@ -170,7 +200,10 @@ pub const Game = struct {
             g.draw();
         }
     }
+
     pub fn deinit(g: *Game) void {
+        rl.unloadRenderTexture(g.renderTexture);
+        rl.unloadShader(g.shader);
         g.vision.deinit();
         g.wmap.deinit(g.allocator);
         g.allocator.destroy(g);
