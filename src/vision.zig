@@ -142,52 +142,44 @@ pub const Vision = struct {
         }
     }
 
+    /// Casts a ray from player position to a corner of a platform and returns the collision point or the corner itself
+    /// or null if player and corner have the same position.
     fn castRay(v: *Vision, start: T.Vec2f, corner: *const Corner) !?T.Vec2f {
         var dir = corner.pos - start;
         const dirlen = std.math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
         if (dirlen == 0) return null;
         dir /= dirlen;
-        var index_bucket = T.fToVec2i(start / T.WorldMap.TileSize);
-        var end = corner.pos;
-        const step = std.math.sign(dir);
-
-        // loop through all horizental steps to see if there is any collision.
-        while (index_bucket[0] < end[0]) : (index_bucket[0] += step[0]) {
-            const x = T.iToF32(index_bucket[0]) * T.WorldMap.TileSize;
-            const y = dir * (x - start[0]) + start[1];
-            const y_ind = T.fToVec2i(y / T.WorldMap.TileSize);
-            if (v.g.wmap.tileset.get(.{index_bucket[0], y_ind}))|key,value|{
-                if (value.type == .wall){
-                    break;
-                }
-            }
-        }
-        // loop through all vertical steps to see if there is any collision.
-
-        const segtop = Segment{ .start = p.pos, .end = p.pos + T.Vec2f{ p.size[0], 0 } };
-        const segleft = Segment{ .start = p.pos, .end = p.pos + T.Vec2f{ 0, p.size[1] } };
-        const segright = Segment{ .start = p.pos + T.Vec2f{ p.size[0], 0 }, .end = p.pos + T.Vec2f{ p.size[0], p.size[1] } };
-        const segbottom = Segment{ .start = p.pos + T.Vec2f{ 0, p.size[1] }, .end = p.pos + T.Vec2f{ p.size[0], p.size[1] } };
-        const segs = [_]Segment{ segtop, segleft, segright, segbottom };
-        var cols = try std.ArrayList(T.Vec2f).initCapacity(v.g.allocator, 2);
-        defer cols.deinit(v.g.allocator);
-        for (segs) |seg| {
-            const collision = getColSegPSeg(.{ .start = v.g.player.pos, .end = corner.pos }, seg);
-            if (collision) |col| {
-                try cols.append(v.g.allocator, col);
-            }
-        }
-        var closest_col: ?T.Vec2f = null;
-        for (cols.items) |col| {
-            if (closest_col) |closest| {
-                if (T.dist2(col, v.g.player.pos) < T.dist2(closest, v.g.player.pos)) {
-                    closest_col = col;
-                }
+        const deltadistx = if (dir[0] != 0) 1 / dir[0] else std.math.inf(f32);
+        const deltadisty = if (dir[1] != 0) 1 / dir[1] else std.math.inf(f32);
+        var mapx = std.math.floor(start[0] / T.WorldMap.TileSize);
+        var mapy = std.math.floor(start[1] / T.WorldMap.TileSize);
+        const tx = if (dir[0] < 0) (start[0] - mapx * T.WorldMap.TileSize) else (mapx * T.WorldMap.TileSize + 1 - start[0]);
+        const ty = if (dir[1] < 0) (start[1] - mapy * T.WorldMap.TileSize) else (mapy * T.WorldMap.TileSize + 1 - start[1]);
+        var sidedistx = tx * deltadistx;
+        var sidedisty = ty * deltadisty;
+        const step = std.math.sign(dir) * T.WorldMap.TileSizeVec2f;
+        var side: enum { EW, NS } = .NS;
+        var hit = false;
+        // two stopping conditions:
+        // 1. ray hits a wall
+        // 2. ray reaches the corner position
+        while (!hit) {
+            if (sidedistx < sidedisty) {
+                sidedistx += deltadistx;
+                mapx += step[0];
+                side = .EW;
             } else {
-                closest_col = col;
+                sidedisty += deltadisty;
+                mapy += step[1];
+                side = .NS;
+            }
+            if (v.g.wmap.tileset.get(.{ mapx, mapy })) |tile| {
+                if (tile.type == .wall) hit = true;
             }
         }
-        return closest_col;
+        // return the collision point at the end
+
+        return collision;
     }
 
     pub fn drawPlayerVision(v: *Vision) void {
