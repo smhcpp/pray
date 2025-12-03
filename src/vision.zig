@@ -24,10 +24,10 @@ pub const Vision = struct {
 
     pub fn updateVisionZone(v: *Vision) void {
         const g = v.g;
-        const left = @max(g.player.pos[0] - g.player.vision_r, 0);
-        const right = @min(g.player.pos[0] + g.player.vision_r, T.iToF32(g.screenWidth));
-        const top = @max(g.player.pos[1] - g.player.vision_r, 0);
-        const bottom = @min(g.player.pos[1] + g.player.vision_r, T.iToF32(g.screenHeight));
+        const left = @max(g.player.pos[0] - g.player.vision_r * T.WorldMap.TileSize, 0);
+        const right = @min(g.player.pos[0] + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
+        const top = @max(g.player.pos[1] - g.player.vision_r * T.WorldMap.TileSize, 0);
+        const bottom = @min(g.player.pos[1] + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
         g.wmap.platforms.items[0].pos = T.Vec2f{ left, top };
         g.wmap.platforms.items[0].size = T.Vec2f{ right - left, bottom - top };
         // std.os.exit(0);
@@ -39,25 +39,18 @@ pub const Vision = struct {
         const g = v.g;
         var corners = try std.ArrayList(Corner).initCapacity(g.allocator, g.wmap.platforms.items.len);
         defer corners.deinit(g.allocator);
-        const minpos = g.player.pos - T.Vec2f{ g.player.vision_r, g.player.vision_r };
-        const maxpos = g.player.pos + T.Vec2f{ g.player.vision_r, g.player.vision_r };
-        const minind = T.iToVec2i(minpos / T.WorldMap.GridSizeVec2f);
-        const maxind = T.iToVec2i(maxpos / T.WorldMap.GridSizeVec2f);
-        var j = minind[0];
-        // print("pid 0: {any}\n",.{g.wmap.platforms.items[0]});
-        while (j <= maxind[0]) : (j += 1) {
-            var k = minind[1];
-            while (k <= maxind[1]) : (k += 1) {
-                if (j < 0 or k < 0 or j >= T.WorldMap.GridCellNumberX or k >= T.WorldMap.GridCellNumberY) continue;
-                for (g.wmap.grid[@intCast(j)][@intCast(k)].pids.items) |pid| {
-                    if (v.vision_step_id == g.wmap.platforms.items[pid].vision_step_id) continue;
-                    // print("Platform ID: {}: {any}\n", .{ pid, g.wmap.platforms.items[pid] });
-                    // std.process.exit(0);
-                    const c = try v.getCorners(pid);
-                    defer g.allocator.free(c);
-                    try corners.appendSlice(g.allocator, c);
-                    g.wmap.platforms.items[pid].vision_step_id = v.vision_step_id;
-                }
+        for (g.wmap.platforms.items, 0..) |p, pid| {
+            // see if the platform overlaps player vision square here first
+            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
+            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
+            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
+            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
+            if (left < right and top < bottom) {
+                // print("Platform ID: {}: {any}\n", .{ pid, g.wmap.platforms.items[pid] });
+                // std.process.exit(0);
+                const c = try v.getCorners(.{ top, right, bottom, left }, pid);
+                defer g.allocator.free(c);
+                try corners.appendSlice(g.allocator, c);
             }
         }
         // now check pid 0 since it is not in any grid cell
@@ -65,83 +58,65 @@ pub const Vision = struct {
         const pvis = try v.getCorners(0);
         defer g.allocator.free(pvis);
         try corners.appendSlice(g.allocator, pvis);
-        try v.updateHits(&corners, minind, maxind);
+        try v.updateHits(&corners);
     }
 
-    fn getCorners(v: *Vision, pid: usize) ![]const Corner {
+    fn getCorners(v: *Vision, sides: [4]f32, pid: usize) ![]const Corner {
         const g = v.g;
         var corners = try std.ArrayList(Corner).initCapacity(g.allocator, 12); // Increased capacity for safety
         defer corners.deinit(g.allocator);
-        const p = &g.wmap.platforms.items[pid];
-        const left = @max(p.pos[0], g.player.pos[0] - g.player.vision_r, 0);
-        const right = @min(p.pos[0] + p.size[0], g.player.pos[0] + g.player.vision_r, T.iToF32(g.screenWidth));
-        const top = @max(p.pos[1], g.player.pos[1] - g.player.vision_r, 0);
-        const bottom = @min(p.pos[1] + p.size[1], g.player.pos[1] + g.player.vision_r, T.iToF32(g.screenHeight));
-        const tl = T.Vec2f{ left, top };
-        const tr = T.Vec2f{ right, top };
-        const bl = T.Vec2f{ left, bottom };
-        const br = T.Vec2f{ right, bottom };
+        const tl = T.Vec2f{ sides[3], sides[0] };
+        const tr = T.Vec2f{ sides[1], sides[0] };
+        const bl = T.Vec2f{ sides[3], sides[2] };
+        const br = T.Vec2f{ sides[1], sides[2] };
         const atl = std.math.atan2(tl[1] - g.player.pos[1], tl[0] - g.player.pos[0]);
         const atr = std.math.atan2(tr[1] - g.player.pos[1], tr[0] - g.player.pos[0]);
         const abl = std.math.atan2(bl[1] - g.player.pos[1], bl[0] - g.player.pos[0]);
         const abr = std.math.atan2(br[1] - g.player.pos[1], br[0] - g.player.pos[0]);
-        if (left < right and top < bottom) {
-            const corners_ = [_]Corner{
-                Corner{ .pos = tl, .pid = pid, .angle = atl, .dist2 = T.dist2(tl, g.player.pos) },
-                Corner{ .pos = tr, .pid = pid, .angle = atr, .dist2 = T.dist2(tr, g.player.pos) },
-                Corner{ .pos = bl, .pid = pid, .angle = abl, .dist2 = T.dist2(bl, g.player.pos) },
-                Corner{ .pos = br, .pid = pid, .angle = abr, .dist2 = T.dist2(br, g.player.pos) },
-            };
-            const max_cast_dist = v.g.player.vision_r * 2.0; // Cast further than vision radius
-            const max_dist2 = max_cast_dist * max_cast_dist;
-            for (corners_) |corner| {
-                const offset: f32 = 0.0001;
-                const angle1 = corner.angle + offset;
-                const angle2 = corner.angle - offset;
-                const pos1 = T.Vec2f{ g.player.pos[0] + std.math.cos(angle1) * max_cast_dist, g.player.pos[1] + std.math.sin(angle1) * max_cast_dist };
-                const pos2 = T.Vec2f{ g.player.pos[0] + std.math.cos(angle2) * max_cast_dist, g.player.pos[1] + std.math.sin(angle2) * max_cast_dist };
-                const corner1 = Corner{ .pos = pos1, .pid = 0, .angle = angle1, .dist2 = max_dist2 };
-                const corner2 = Corner{ .pos = pos2, .pid = 0, .angle = angle2, .dist2 = max_dist2 };
-                try corners.append(g.allocator, corner);
-                try corners.append(g.allocator, corner1);
-                try corners.append(g.allocator, corner2);
-            }
+        const corners_ = [_]Corner{
+            Corner{ .pos = tl, .pid = pid, .angle = atl, .dist2 = T.dist2(tl, g.player.pos) },
+            Corner{ .pos = tr, .pid = pid, .angle = atr, .dist2 = T.dist2(tr, g.player.pos) },
+            Corner{ .pos = bl, .pid = pid, .angle = abl, .dist2 = T.dist2(bl, g.player.pos) },
+            Corner{ .pos = br, .pid = pid, .angle = abr, .dist2 = T.dist2(br, g.player.pos) },
+        };
+        const max_cast_dist = v.g.player.vision_r * 2.0; // Cast further than vision radius
+        const max_dist2 = max_cast_dist * max_cast_dist;
+        for (corners_) |corner| {
+            const offset: f32 = 0.0001;
+            const angle1 = corner.angle + offset;
+            const angle2 = corner.angle - offset;
+            const pos1 = T.Vec2f{ g.player.pos[0] + std.math.cos(angle1) * max_cast_dist, g.player.pos[1] + std.math.sin(angle1) * max_cast_dist };
+            const pos2 = T.Vec2f{ g.player.pos[0] + std.math.cos(angle2) * max_cast_dist, g.player.pos[1] + std.math.sin(angle2) * max_cast_dist };
+            const corner1 = Corner{ .pos = pos1, .pid = 0, .angle = angle1, .dist2 = max_dist2 };
+            const corner2 = Corner{ .pos = pos2, .pid = 0, .angle = angle2, .dist2 = max_dist2 };
+            try corners.append(g.allocator, corner);
+            try corners.append(g.allocator, corner1);
+            try corners.append(g.allocator, corner2);
         }
         return corners.toOwnedSlice(g.allocator);
     }
 
-    fn updateHits(v: *Vision, corners: *std.ArrayList(Corner), minind: T.Vec2i, maxind: T.Vec2i) !void {
+    fn updateHits(v: *Vision, corners: *std.ArrayList(Corner)) !void {
         if (v.vision_step_id > 10000) v.vision_step_id = 0;
         v.hits.clearRetainingCapacity();
         const g = v.g;
         for (corners.items) |corner| {
             v.vision_step_id += 1;
             var closest = Corner{ .pos = corner.pos, .pid = corner.pid, .angle = corner.angle, .dist2 = corner.dist2 };
-            try v.checkVisionCollision(0, &corner, &closest);
-            var i = minind[0];
-            while (i <= maxind[0]) : (i += 1) {
-                var j = minind[1];
-                while (j <= maxind[1]) : (j += 1) {
-                    if (i < 0 or j < 0 or i >= T.WorldMap.GridCellNumberX or j >= T.WorldMap.GridCellNumberY) continue;
-                    for (g.wmap.grid[@intCast(i)][@intCast(j)].pids.items) |pid| {
-                        if (g.wmap.platforms.items[pid].vision_step_id == v.vision_step_id) continue;
-                        g.wmap.platforms.items[pid].vision_step_id = v.vision_step_id;
-                        try v.checkPenetratedVisionCollision(pid, &corner, &closest);
-                    }
-                }
-            }
-            try v.hits.append(v.g.allocator, closest);
+            try v.checkVisionCollision(&corner, &closest);
+            // try v.checkPenetratedVisionCollision( &corner, &closest);
+            try v.hits.append(g.allocator, closest);
         }
     }
 
-    fn checkVisionCollision(v: *Vision, pid: usize, corner: *const Corner, closest: *Corner) !void {
-        const collision = try v.getCollision(pid, corner);
+    fn checkVisionCollision(v: *Vision, corner: *const Corner, closest: *Corner) !void {
+        const collision = try v.castRay(v.g.player.pos, corner);
         if (collision) |col| {
-            const d = T.dist2(col, v.g.player.pos);
+            const d = T.dist2(col.pos, v.g.player.pos);
             if (closest.dist2 > d) {
-                closest.pos = col;
-                closest.pid = pid;
-                closest.dist2 = d;
+                closest.pos = col.pos;
+                closest.pid = col.pid;
+                closest.dist2 = col.dist2;
             }
         }
     }
@@ -167,8 +142,28 @@ pub const Vision = struct {
         }
     }
 
-    fn getCollision(v: *Vision, pid: usize, corner: *const Corner) !?T.Vec2f {
-        const p = v.g.wmap.platforms.items[pid];
+    fn castRay(v: *Vision, start: T.Vec2f, corner: *const Corner) !?T.Vec2f {
+        var dir = corner.pos - start;
+        const dirlen = std.math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
+        if (dirlen == 0) return null;
+        dir /= dirlen;
+        var index_bucket = T.fToVec2i(start / T.WorldMap.TileSize);
+        var end = corner.pos;
+        const step = std.math.sign(dir);
+
+        // loop through all horizental steps to see if there is any collision.
+        while (index_bucket[0] < end[0]) : (index_bucket[0] += step[0]) {
+            const x = T.iToF32(index_bucket[0]) * T.WorldMap.TileSize;
+            const y = dir * (x - start[0]) + start[1];
+            const y_ind = T.fToVec2i(y / T.WorldMap.TileSize);
+            if (v.g.wmap.tileset.get(.{index_bucket[0], y_ind}))|key,value|{
+                if (value.type == .wall){
+                    break;
+                }
+            }
+        }
+        // loop through all vertical steps to see if there is any collision.
+
         const segtop = Segment{ .start = p.pos, .end = p.pos + T.Vec2f{ p.size[0], 0 } };
         const segleft = Segment{ .start = p.pos, .end = p.pos + T.Vec2f{ 0, p.size[1] } };
         const segright = Segment{ .start = p.pos + T.Vec2f{ p.size[0], 0 }, .end = p.pos + T.Vec2f{ p.size[0], p.size[1] } };

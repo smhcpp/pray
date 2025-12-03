@@ -45,7 +45,7 @@ pub const Player = struct {
     vel: Vec2f = Vec2f{ 0, 0 },
     maxvel: Vec2f = Vec2f{ 400, 600 },
     speedX: f32 = 200,
-    vision_r: f32 = 200,
+    vision_r: f32 = 25,
     jump_power: f32 = 500,
     is_grounded: bool = false,
 

@@ -129,10 +129,10 @@ pub const Game = struct {
         if (g.pause) g.drawGridLines();
         for (g.wmap.platforms.items) |p| {
             if (!p.drawable) continue;
-            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r, 0);
-            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r, T.iToF32(g.screenWidth));
-            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r, 0);
-            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r, T.iToF32(g.screenHeight));
+            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
+            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
+            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
+            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
             if (left < right and top < bottom)
                 rl.drawRectangleV(.{ .x = left, .y = top }, .{ .x = right - left, .y = bottom - top }, p.color);
         }
