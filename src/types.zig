@@ -19,7 +19,7 @@ pub fn iToVec2f(v: Vec2i) Vec2f {
     return .{ @floatFromInt(v[0]), @floatFromInt(v[1]) };
 }
 
-pub fn iToVec2i(v: Vec2f) Vec2i {
+pub fn fToVec2i(v: Vec2f) Vec2i {
     return .{ @intFromFloat(v[0]), @intFromFloat(v[1]) };
 }
 
@@ -38,9 +38,7 @@ pub const Player = struct {
     r: f32 = 10,
     collision_mask: u32 = 1,
     vision_mask: u32 = 1,
-    // drawable: bool = true,
     texture_idle: rl.Texture2D = undefined,
-    // texture_run:rl.Texture2D,
     color: rl.Color = .blue,
     vel: Vec2f = Vec2f{ 0, 0 },
     maxvel: Vec2f = Vec2f{ 400, 600 },
@@ -69,7 +67,6 @@ pub const Player = struct {
 /// if needed
 pub const Platform = struct {
     collision_step_id: u64 = 0,
-    vision_step_id: u64 = 0,
     vision_id: u32 = 1,
     collision_id: u32 = 1,
     drawable: bool = true,
@@ -106,8 +103,8 @@ pub fn movePlayer(g: *Game) void {
         const pos = g.player.pos + bucket;
         const minpos = pos - Vec2f{ g.player.r, 2 * g.player.r };
         const maxpos = pos + Vec2f{ g.player.r, 2 * g.player.r };
-        const minind = iToVec2i(minpos / WorldMap.GridSizeVec2f);
-        const maxind = iToVec2i(maxpos / WorldMap.GridSizeVec2f);
+        const minind = fToVec2i(minpos / WorldMap.GridSizeVec2f);
+        const maxind = fToVec2i(maxpos / WorldMap.GridSizeVec2f);
         var j = minind[0];
         var k = minind[1];
         while (j <= maxind[0]) : (j += 1) {
@@ -169,16 +166,19 @@ pub fn checkPlayerCollision(pos: Vec2f, capr: f32, vel: Vec2f, plat: Platform, p
 }
 
 pub const WorldMap = struct {
-    pub const TileSize: f32 = 8;
     pub const TileNumberX: f32 = 128;
     pub const TileNumberY: f32 = 100;
-    pub const TileSizeVec2f = Vec2f{ TileSize, TileSize };
+    pub const TileSize = Vec2f{ 8, 8 };
+    width: f32,
+    height: f32,
     tileset: std.AutoHashMap(Vec2i, Tile),
     platforms: std.ArrayList(Platform),
 
     pub fn init(allocator: std.mem.Allocator) !*WorldMap {
         const map = try allocator.create(WorldMap);
         map.* = .{
+            .width = TileNumberX * TileSize[0],
+            .height = TileNumberY * TileSize[1],
             .platforms = try std.ArrayList(Platform).initCapacity(allocator, 10),
             .tileset = std.AutoHashMap(Vec2i, Tile).init(allocator),
         };
@@ -187,12 +187,12 @@ pub const WorldMap = struct {
     }
 
     pub fn setup(map: *WorldMap, allocator: std.mem.Allocator) !void {
-        try map.platforms.append(allocator, Platform{
-            .pos = .{ 0, 0 },
-            .size = .{ 1, 1 },
-            .collision_id = 0,
-            .drawable = false,
-        });
+        // try map.platforms.append(allocator, Platform{
+        //     .pos = .{ 0, 0 },
+        //     .size = .{ 1, 1 },
+        //     .collision_id = 0,
+        //     .drawable = false,
+        // });
 
         try map.platforms.append(allocator, Platform{
             .pos = .{ 13, 6 },
@@ -216,20 +216,21 @@ pub const WorldMap = struct {
 
         try map.platforms.append(allocator, Platform{
             .pos = .{ 0, TileNumberY - 1 },
-            .size = .{  TileNumberX , 1 },
+            .size = .{ TileNumberX, 1 },
         });
 
         for (map.platforms.items, 0..) |platform, pid| {
+            // print("Platform {}: pos={} size={}\n", .{pid, platform.pos, platform.size});
             if (platform.collision_id == 0) continue;
-            const imin: usize = @intCast(platform.pos[0]);
-            const imax: usize = @intCast(platform.pos[0] + platform.size[0]);
-            const jmin: usize = @intCast(platform.pos[1]);
-            const jmax: usize = @intCast(platform.pos[1] + platform.size[1]);
+            const imin: usize = @intFromFloat(platform.pos[0]);
+            const imax: usize = @intFromFloat(platform.pos[0] + platform.size[0]);
+            const jmin: usize = @intFromFloat(platform.pos[1]);
+            const jmax: usize = @intFromFloat(platform.pos[1] + platform.size[1]);
             var i = imin;
             while (i <= imax) : (i += 1) {
                 var j = jmin;
                 while (j <= jmax) : (j += 1) {
-                    map.tileset.put(.{ @intCast(i), @intCast(j) }, .{ .type = .block, .platform_id = pid });
+                    try map.tileset.put(.{ @intCast(i), @intCast(j) }, .{ .type = .wall, .platform_id = pid });
                 }
             }
         }

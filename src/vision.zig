@@ -1,5 +1,6 @@
 const std = @import("std");
 const rl = @import("raylib");
+const gl = rl.gl;
 const T = @import("types.zig");
 const print = std.debug.print;
 const Game = @import("game.zig").Game;
@@ -22,29 +23,31 @@ pub const Vision = struct {
         v.g.allocator.destroy(v);
     }
 
-    pub fn updateVisionZone(v: *Vision) void {
+    fn insertVisionCorners(v: *Vision, corners: *std.ArrayList(Corner)) !void {
         const g = v.g;
-        const left = @max(g.player.pos[0] - g.player.vision_r * T.WorldMap.TileSize, 0);
-        const right = @min(g.player.pos[0] + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
-        const top = @max(g.player.pos[1] - g.player.vision_r * T.WorldMap.TileSize, 0);
-        const bottom = @min(g.player.pos[1] + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
-        g.wmap.platforms.items[0].pos = T.Vec2f{ left, top };
-        g.wmap.platforms.items[0].size = T.Vec2f{ right - left, bottom - top };
-        // std.os.exit(0);
+        const tile_size = T.WorldMap.TileSize[0];
+        const left = @max(g.player.pos[0] - g.player.vision_r * tile_size, 0);
+        const top = @max(g.player.pos[1] - g.player.vision_r * tile_size, 0);
+        const right = @min(g.player.pos[0] + g.player.vision_r * tile_size, T.iToF32(g.screenWidth));
+        const bottom = @min(g.player.pos[1] + g.player.vision_r * tile_size, T.iToF32(g.screenHeight));
+        if (left < right and top < bottom) {
+            const c = try v.getCorners(.{ top, right, bottom, left }, null);
+            defer g.allocator.free(c);
+            try corners.appendSlice(g.allocator, c);
+        }
     }
 
     pub fn updatePlayerVision(v: *Vision) !void {
-        v.updateVisionZone();
-        v.vision_step_id += 1;
+        const tile_size = T.WorldMap.TileSize[0];
         const g = v.g;
         var corners = try std.ArrayList(Corner).initCapacity(g.allocator, g.wmap.platforms.items.len);
         defer corners.deinit(g.allocator);
+        try v.insertVisionCorners(&corners);
         for (g.wmap.platforms.items, 0..) |p, pid| {
-            // see if the platform overlaps player vision square here first
-            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
-            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
-            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
-            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
+            const left = @max(p.pos[0] * tile_size, g.player.pos[0] - g.player.vision_r * tile_size, 0);
+            const top = @max(p.pos[1] * tile_size, g.player.pos[1] - g.player.vision_r * tile_size, 0);
+            const right = @min(p.pos[0] * tile_size + p.size[0] * tile_size, g.player.pos[0] + g.player.vision_r * tile_size, T.iToF32(g.screenWidth));
+            const bottom = @min(p.pos[1] * tile_size + p.size[1] * tile_size, g.player.pos[1] + g.player.vision_r * tile_size, T.iToF32(g.screenHeight));
             if (left < right and top < bottom) {
                 // print("Platform ID: {}: {any}\n", .{ pid, g.wmap.platforms.items[pid] });
                 // std.process.exit(0);
@@ -53,16 +56,12 @@ pub const Vision = struct {
                 try corners.appendSlice(g.allocator, c);
             }
         }
-        // now check pid 0 since it is not in any grid cell
-        // pid 0 is the player's vision platform
-        const pvis = try v.getCorners(0);
-        defer g.allocator.free(pvis);
-        try corners.appendSlice(g.allocator, pvis);
         try v.updateHits(&corners);
     }
 
-    fn getCorners(v: *Vision, sides: [4]f32, pid: usize) ![]const Corner {
+    fn getCorners(v: *Vision, sides: [4]f32, pid: ?usize) ![]const Corner {
         const g = v.g;
+        const tile_size = T.WorldMap.TileSize[0];
         var corners = try std.ArrayList(Corner).initCapacity(g.allocator, 12); // Increased capacity for safety
         defer corners.deinit(g.allocator);
         const tl = T.Vec2f{ sides[3], sides[0] };
@@ -79,10 +78,10 @@ pub const Vision = struct {
             Corner{ .pos = bl, .pid = pid, .angle = abl, .dist2 = T.dist2(bl, g.player.pos) },
             Corner{ .pos = br, .pid = pid, .angle = abr, .dist2 = T.dist2(br, g.player.pos) },
         };
-        const max_cast_dist = v.g.player.vision_r * 2.0; // Cast further than vision radius
-        const max_dist2 = max_cast_dist * max_cast_dist;
+        const max_cast_dist = v.g.player.vision_r * tile_size; // Cast further than vision radius
+        const max_dist2 = max_cast_dist * max_cast_dist * 2;
         for (corners_) |corner| {
-            const offset: f32 = 0.0001;
+            const offset: f32 = 0.01;
             const angle1 = corner.angle + offset;
             const angle2 = corner.angle - offset;
             const pos1 = T.Vec2f{ g.player.pos[0] + std.math.cos(angle1) * max_cast_dist, g.player.pos[1] + std.math.sin(angle1) * max_cast_dist };
@@ -100,17 +99,17 @@ pub const Vision = struct {
         if (v.vision_step_id > 10000) v.vision_step_id = 0;
         v.hits.clearRetainingCapacity();
         const g = v.g;
+        print("--------------------------------\n", .{});
         for (corners.items) |corner| {
-            v.vision_step_id += 1;
             var closest = Corner{ .pos = corner.pos, .pid = corner.pid, .angle = corner.angle, .dist2 = corner.dist2 };
-            try v.checkVisionCollision(&corner, &closest);
+            v.checkVisionCollision(&corner, &closest);
             // try v.checkPenetratedVisionCollision( &corner, &closest);
             try v.hits.append(g.allocator, closest);
         }
     }
 
-    fn checkVisionCollision(v: *Vision, corner: *const Corner, closest: *Corner) !void {
-        const collision = try v.castRay(v.g.player.pos, corner);
+    fn checkVisionCollision(v: *Vision, corner: *const Corner, closest: *Corner) void {
+        const collision = v.castRay(v.g.player.pos, corner, v.g.player.vision_r);
         if (collision) |col| {
             const d = T.dist2(col.pos, v.g.player.pos);
             if (closest.dist2 > d) {
@@ -121,74 +120,125 @@ pub const Vision = struct {
         }
     }
 
-    fn checkPenetratedVisionCollision(v: *Vision, pid: usize, corner: *const Corner, closest: *Corner) !void {
-        const collision = try v.getCollision(pid, corner);
-        if (collision) |col| {
-            const d = T.dist2(col, v.g.player.pos);
-            if (closest.dist2 > d) {
-                const penetration_depth: f32 = 30.0; // How deep light goes into wall (pixels)
-                const dist = std.math.sqrt(d);
-                var extended_pos = col;
-                if (dist > 0.1) {
-                    const dx = (col[0] - v.g.player.pos[0]) / dist;
-                    const dy = (col[1] - v.g.player.pos[1]) / dist;
-                    extended_pos[0] += dx * penetration_depth;
-                    extended_pos[1] += dy * penetration_depth;
+    fn castRay(v: *Vision, start: T.Vec2f, corner: *const Corner, vision_radius: f32) ?Corner {
+        const ray_dir = corner.pos - start;
+        const tile_size = T.WorldMap.TileSize;
+        const ray_len = std.math.sqrt(ray_dir[0] * ray_dir[0] + ray_dir[1] * ray_dir[1]);
+        if (ray_len == 0) return null;
+        const norm_ray_dir = ray_dir / T.Vec2f{ ray_len, ray_len };
+        const ray_unit_distx = if (norm_ray_dir[0] != 0) @abs(1 / norm_ray_dir[0]) else std.math.inf(f32);
+        const ray_unit_disty = if (norm_ray_dir[1] != 0) @abs(1 / norm_ray_dir[1]) else std.math.inf(f32);
+        const ray_unit_dist = T.Vec2f{ ray_unit_distx, ray_unit_disty };
+        var map_coord = @floor(start / tile_size);
+        const start_coord = map_coord;
+        var step = T.Vec2f{ 0, 0 };
+        var isHorizontal = false;
+        var ray_length_bucket = T.Vec2f{ 0, 0 };
+        var is_hit = false;
+        var pid: ?usize = 0;
+        if (norm_ray_dir[0] < 0) {
+            step[0] = -1;
+            ray_length_bucket[0] = (start[0] / tile_size[0] - map_coord[0] + 1) * ray_unit_dist[0];
+        } else {
+            step[0] = 1;
+            ray_length_bucket[0] = (map_coord[0] + 1 - start[0] / tile_size[0]) * ray_unit_dist[0];
+        }
+        if (norm_ray_dir[1] < 0) {
+            step[1] = -1;
+            ray_length_bucket[1] = (start[1] / tile_size[1] - map_coord[1] + 1) * ray_unit_dist[1];
+        } else {
+            step[1] = 1;
+            ray_length_bucket[1] = (map_coord[1] + 1 - start[1] / tile_size[1]) * ray_unit_dist[1];
+        }
+        while (!is_hit) {
+            if (ray_length_bucket[0] < ray_length_bucket[1]) {
+                map_coord[0] += step[0];
+                isHorizontal = true;
+                ray_length_bucket[0] += ray_unit_dist[0];
+            } else {
+                map_coord[1] += step[1];
+                isHorizontal = false;
+                ray_length_bucket[1] += ray_unit_dist[1];
+            }
+            const distance = @abs(map_coord - start_coord);
+            const out_of_bounds = map_coord[0] < 0 or map_coord[0] >= v.g.wmap.width or map_coord[1] < 0 or map_coord[1] >= v.g.wmap.height;
+            if (out_of_bounds or distance[0] > vision_radius or distance[1] > vision_radius) {
+                is_hit = true;
+                pid = null;
+            }
+            if (v.g.wmap.tileset.get(.{ @intFromFloat(map_coord[0]), @intFromFloat(map_coord[1]) })) |tile| {
+                if (tile.type == .wall) {
+                    is_hit = true;
+                    pid = tile.platform_id;
                 }
-                closest.pos = extended_pos;
-                closest.pid = pid;
-                closest.dist2 = d; // Important: Compare against REAL distance, not extended distance
             }
         }
+        if (is_hit) {
+            const realdist = ray_length_bucket - ray_unit_dist;
+            const dist = if (isHorizontal) realdist[0] * tile_size[0] else realdist[1] * tile_size[1];
+            if (dist * dist > corner.dist2) return corner.*;
+            const hit = start + norm_ray_dir * T.Vec2f{ dist, dist };
+            // print("here is a distance: {}\n", .{dist});
+            return Corner{
+                .pos = hit,
+                .dist2 = dist * dist,
+                .angle = corner.angle,
+                .pid = pid,
+            };
+        }
+        return null;
     }
 
-    /// Casts a ray from player position to a corner of a platform and returns the collision point or the corner itself
-    /// or null if player and corner have the same position.
-    fn castRay(v: *Vision, start: T.Vec2f, corner: *const Corner) !?T.Vec2f {
-        var dir = corner.pos - start;
-        const dirlen = std.math.sqrt(dir[0] * dir[0] + dir[1] * dir[1]);
-        if (dirlen == 0) return null;
-        dir /= dirlen;
-        const deltadistx = if (dir[0] != 0) 1 / dir[0] else std.math.inf(f32);
-        const deltadisty = if (dir[1] != 0) 1 / dir[1] else std.math.inf(f32);
-        var mapx = std.math.floor(start[0] / T.WorldMap.TileSize);
-        var mapy = std.math.floor(start[1] / T.WorldMap.TileSize);
-        const tx = if (dir[0] < 0) (start[0] - mapx * T.WorldMap.TileSize) else (mapx * T.WorldMap.TileSize + 1 - start[0]);
-        const ty = if (dir[1] < 0) (start[1] - mapy * T.WorldMap.TileSize) else (mapy * T.WorldMap.TileSize + 1 - start[1]);
-        var sidedistx = tx * deltadistx;
-        var sidedisty = ty * deltadisty;
-        const step = std.math.sign(dir) * T.WorldMap.TileSizeVec2f;
-        var side: enum { EW, NS } = .NS;
-        var hit = false;
-        // two stopping conditions:
-        // 1. ray hits a wall
-        // 2. ray reaches the corner position
-        while (!hit) {
-            if (sidedistx < sidedisty) {
-                sidedistx += deltadistx;
-                mapx += step[0];
-                side = .EW;
-            } else {
-                sidedisty += deltadisty;
-                mapy += step[1];
-                side = .NS;
+    pub fn _testDrawVision(v: *Vision) void {
+        if (v.hits.items.len < 3) return;
+        std.mem.sort(Corner, v.hits.items, {}, comptime lessThan);
+        var write_idx: usize = 0;
+        var i: usize = 1;
+        while (i < v.hits.items.len) : (i += 1) {
+            const current = v.hits.items[i];
+            const prev = v.hits.items[write_idx];
+            const angle_diff = @abs(current.angle - prev.angle);
+            const dist_diff = @abs(current.dist2 - prev.dist2);
+            if (angle_diff < 0.0001 and dist_diff < 1.0) {
+                continue;
             }
-            if (v.g.wmap.tileset.get(.{ mapx, mapy })) |tile| {
-                if (tile.type == .wall) hit = true;
+            if (write_idx > 0) {
+                const prev_prev = v.hits.items[write_idx - 1];
+                if (current.pid == prev.pid and prev.pid == prev_prev.pid) {
+                    const p1 = prev_prev.pos;
+                    const p2 = prev.pos;
+                    const p3 = current.pos;
+                    const v1x = p2[0] - p1[0];
+                    const v1y = p2[1] - p1[1];
+                    const v2x = p3[0] - p2[0];
+                    const v2y = p3[1] - p2[1];
+                    const cross = v1x * v2y - v1y * v2x;
+                    if (@abs(cross) < 5.0) { // Tolerance of 5.0 covers float noise
+                        v.hits.items[write_idx] = current;
+                        continue; // Done with this point, loop again
+                    }
+                }
             }
+            write_idx += 1;
+            v.hits.items[write_idx] = current;
         }
-        // return the collision point at the end
-
-        return collision;
+        v.hits.items.len = write_idx + 1;
+        const center = v.g.player.pos;
+        for (0..v.hits.items.len) |idx| {
+            const a = v.hits.items[idx].pos;
+            const b = v.hits.items[(idx + 1) % v.hits.items.len].pos;
+            print("Hit Point {}: pid:{?}, dist2:{}, angle:{}\n", .{ idx, v.hits.items[idx].pid, v.hits.items[idx].dist2, v.hits.items[idx].angle });
+            rl.drawTriangle(T.toRLVec(center), T.toRLVec(b), T.toRLVec(a), .yellow);
+        }
     }
 
     pub fn drawPlayerVision(v: *Vision) void {
         if (v.hits.items.len < 3) return;
         std.mem.sort(Corner, v.hits.items, {}, comptime lessThan);
-        const gl = rl.gl;
         const center = v.g.player.pos;
         gl.rlBegin(gl.rl_triangles);
         for (0..v.hits.items.len) |i| {
+            print("Hit Point {}: dist2:{} and angle:{}\n", .{ i, v.hits.items[i].dist2, v.hits.items[i].angle });
             const a = v.hits.items[i].pos;
             const b = v.hits.items[(i + 1) % v.hits.items.len].pos;
             gl.rlColor4ub(255, 255, 255, 255);

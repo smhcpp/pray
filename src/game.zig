@@ -22,8 +22,8 @@ pub const Game = struct {
     allocator: std.mem.Allocator,
     player: T.Player = undefined,
     wmap: *T.WorldMap = undefined,
-    screenWidth: i32 = T.fToI32(T.WorldMap.TileSize * T.WorldMap.TileNumberX),
-    screenHeight: i32 = T.fToI32(T.WorldMap.TileSize * T.WorldMap.TileNumberY),
+    screenWidth: i32 = T.fToI32(T.WorldMap.TileSize[0] * T.WorldMap.TileNumberX),
+    screenHeight: i32 = T.fToI32(T.WorldMap.TileSize[0] * T.WorldMap.TileNumberY),
 
     inputs: struct {
         right: bool,
@@ -87,8 +87,8 @@ pub const Game = struct {
         }
     }
 
-    fn loadTextures(g:*Game) !void{
-        g.player.texture_idle= try rl.loadTexture("assets/sprites/player-idle.png");
+    fn loadTextures(g: *Game) !void {
+        g.player.texture_idle = try rl.loadTexture("assets/sprites/player-idle.png");
     }
 
     fn setup(g: *Game) !void {
@@ -98,27 +98,56 @@ pub const Game = struct {
         g.player = T.Player{
             .pos = .{ T.iToF32(@divTrunc(g.screenWidth, 2)), T.iToF32(@divTrunc(g.screenHeight, 2)) },
         };
-
-        // Shader setup
         g.shader = try rl.loadShader(null, "assets/shaders/vision2.glsl");
         if (g.shader.id == 0) {
             print("ERROR: Failed to load shader\n", .{});
-            // Handle error or return
         }
-
-        // Get Uniform Locations
         g.player_pos_loc = rl.getShaderLocation(g.shader, "player_pos");
         g.radius_loc = rl.getShaderLocation(g.shader, "radius");
         g.resolution_loc = rl.getShaderLocation(g.shader, "resolution");
-
-        // Set constant uniforms (Resolution doesn't change)
         const res = [2]f32{ T.iToF32(g.screenWidth), T.iToF32(g.screenHeight) };
         rl.setShaderValue(g.shader, g.resolution_loc, &res, rl.ShaderUniformDataType.vec2);
-
-        // Load Render Texture (Off-screen canvas)
         g.renderTexture = try rl.loadRenderTexture(g.screenWidth, g.screenHeight);
-        // rl.setTextureFilter(g.renderTexture.texture, rl.TextureFilter.bilinear);
-        // try g.loadTextures();
+        // g.loadTextures();
+    }
+
+    fn _testDraw(g: *Game) void {
+        rl.clearBackground(rl.Color.black);
+        g.drawPlatforms();
+        // g.vision.drawPlayerVision();
+        g.drawPlatforms();
+        g.vision._testDrawVision();
+        g.player.draw();
+    }
+
+    fn drawPlatforms(g: *Game) void {
+        const tileSize = T.WorldMap.TileSize[0];
+        if (g.pause) g.drawGridLines();
+        for (g.wmap.platforms.items) |p| {
+            if (!p.drawable) continue;
+            const left = @max(
+                p.pos[0] * tileSize,
+                g.player.pos[0] - g.player.vision_r * tileSize,
+                0,
+            );
+            const right = @min(
+                p.pos[0] * tileSize + p.size[0] * tileSize,
+                g.player.pos[0] + g.player.vision_r * tileSize,
+                T.iToF32(g.screenWidth),
+            );
+            const top = @max(
+                p.pos[1] * tileSize,
+                g.player.pos[1] - g.player.vision_r * tileSize,
+                0,
+            );
+            const bottom = @min(
+                p.pos[1] * tileSize + p.size[1] * tileSize,
+                g.player.pos[1] + g.player.vision_r * tileSize,
+                T.iToF32(g.screenHeight),
+            );
+            if (left < right and top < bottom)
+                rl.drawRectangleV(.{ .x = left, .y = top }, .{ .x = right - left, .y = bottom - top }, p.color);
+        }
     }
 
     fn draw(g: *Game) void {
@@ -126,16 +155,7 @@ pub const Game = struct {
         rl.clearBackground(rl.Color.blank);
         g.vision.drawPlayerVision();
         rl.endTextureMode();
-        if (g.pause) g.drawGridLines();
-        for (g.wmap.platforms.items) |p| {
-            if (!p.drawable) continue;
-            const left = @max(p.pos[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
-            const right = @min(p.pos[0] * T.WorldMap.TileSize + p.size[0] * T.WorldMap.TileSize, g.player.pos[0] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenWidth));
-            const top = @max(p.pos[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize - g.player.vision_r * T.WorldMap.TileSize, 0);
-            const bottom = @min(p.pos[1] * T.WorldMap.TileSize + p.size[1] * T.WorldMap.TileSize, g.player.pos[1] * T.WorldMap.TileSize + g.player.vision_r * T.WorldMap.TileSize, T.iToF32(g.screenHeight));
-            if (left < right and top < bottom)
-                rl.drawRectangleV(.{ .x = left, .y = top }, .{ .x = right - left, .y = bottom - top }, p.color);
-        }
+        g.drawPlatforms();
         g.player.draw();
         // g.player.drawTexture();
         rl.beginShaderMode(g.shader);
@@ -149,13 +169,22 @@ pub const Game = struct {
     }
 
     fn drawGridLines(g: *Game) void {
+        const tile_size = T.WorldMap.TileSize[0];
         var i: i32 = 0;
         while (i < T.WorldMap.TileNumberY) : (i += 1) {
-            rl.drawLineV(rl.Vector2{ .x = 0, .y = T.iToF32(i) * T.WorldMap.TileSize }, rl.Vector2{ .x = T.iToF32(g.screenWidth), .y = T.iToF32(i) * T.WorldMap.TileSize }, .yellow);
+            rl.drawLineV(
+                rl.Vector2{ .x = 0, .y = T.iToF32(i) * tile_size },
+                rl.Vector2{ .x = T.iToF32(g.screenWidth), .y = T.iToF32(i) * tile_size },
+                .yellow,
+            );
         }
         i = 0;
         while (i < T.WorldMap.TileNumberX) : (i += 1) {
-            rl.drawLineV(rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.TileSize, .y = 0 }, rl.Vector2{ .x = T.iToF32(i) * T.WorldMap.TileSize, .y = T.iToF32(g.screenHeight) }, .yellow);
+            rl.drawLineV(
+                rl.Vector2{ .x = T.iToF32(i) * tile_size, .y = 0 },
+                rl.Vector2{ .x = T.iToF32(i) * tile_size, .y = T.iToF32(g.screenHeight) },
+                .yellow,
+            );
         }
     }
 
@@ -197,7 +226,8 @@ pub const Game = struct {
             rl.beginDrawing();
             defer rl.endDrawing();
             rl.clearBackground(.black);
-            g.draw();
+            // g.draw();
+            g._testDraw();
         }
     }
 
