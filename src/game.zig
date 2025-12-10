@@ -118,6 +118,7 @@ pub const Game = struct {
         g.drawPlatforms();
         g.vision._testDrawVision();
         g.player.draw();
+        g.vision.debugDrawRays();
     }
 
     fn drawPlatforms(g: *Game) void {
